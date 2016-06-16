@@ -180,8 +180,8 @@ if __name__ == "__main__":
     IC(u, cells)
     for i in range(0, bcells):
         U[i] = w2u(u[i])
-
-    for n in range(1, 50000):
+    
+    for n in range(0, 10000):
         print "Steps: ", nsteps, ';', 'Time: ', t
         if (t==tf): break
         dt = calc_time_step(cfl, dx, bcells, U)
