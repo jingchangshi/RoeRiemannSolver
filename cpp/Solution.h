@@ -29,6 +29,7 @@ class Solution {
         double TimeStep;
         double CFL;
         const double Gamma = 1.4;
+        const double Gamma_Ext1 = (Gamma-1.0)/(Gamma+1.0);
 //=========================================================
         void setPts(double* InPts_ptr){
             PtsFlu_ptr = InPts_ptr;
@@ -96,9 +97,9 @@ class Solution {
                 / ( sqrt(*(WL)) + sqrt(*(WR)) );
             RoeSS = sqrt( (Gamma-1.0) * (RoeEtha-0.5*RoeVel*RoeVel) );
             //
-            EigVal[0] = abs(RoeVel - RoeSS);
-            EigVal[1] = abs(RoeVel);
-            EigVal[2] = abs(RoeVel + RoeSS);
+            EigVal[0] = RoeVel - RoeSS;
+            EigVal[1] = RoeVel;
+            EigVal[2] = RoeVel + RoeSS;
             //
             EigVec[0*3+0] = 1.0;
             EigVec[1*3+0] = RoeVel - RoeSS;
@@ -117,6 +118,67 @@ class Solution {
                 * ( UJump[0]*(RoeEtha-RoeVel*RoeVel) + RoeVel*UJump[1] - UJump[2] );
             WaveA[0] = (UJump[0]*(RoeVel + RoeSS)-UJump[1]-RoeSS*WaveA[1]) / (2.0*RoeSS);
             WaveA[2] = UJump[0] - WaveA[0] - WaveA[1];
+            // Harten-Hyman Entropy fix
+            double SS_L = sqrt(Gamma*WL[2]/WL[0]), \
+                   SS_R = sqrt(Gamma*WR[2]/WR[0]);
+            // Direct approach
+            double Rho_StarL = WL[0] + WaveA[0], \
+                   Rho_StarR = WR[0] - WaveA[2];
+            double U_Star = \
+                   ( WL[0] * WL[1] + WaveA[0]*(RoeVel-RoeSS) ) \
+                    / ( WL[0] + WaveA[0] );
+            double P_Star = (Gamma-1.0) * ( \
+                   UL[2] + WaveA[0]*(RoeEtha-RoeVel*RoeSS) \
+                   - 0.5*Rho_StarL*U_Star*U_Star );
+
+/*            // PVRS Approximation
+            double Rho_Bar = 0.5 * (WL[0]+WR[0]), \
+                   SS_Bar = 0.5 * (SS_L+SS_R);
+            double P_Star = fmax(0.0, \
+                   0.5*(WL[2]+WR[2]) + 0.5*(WL[1]-WR[1])*Rho_Bar*SS_Bar \
+                   ); // To avoid negative value of P_Star
+            // P_Star = 0.5*(WL[2]+WR[2]) + 0.5*(WL[1]-WR[1])*Rho_Bar*SS_Bar;
+            double U_Star = 0.5*(WL[1]+WR[1]) \
+                          + 0.5*(WL[2]-WR[2])/(Rho_Bar*SS_Bar);
+            double Rho_StarL = WL[0] + (WL[1]-U_Star)*Rho_Bar/SS_Bar, \
+                   Rho_StarR = WR[0] + (U_Star-WR[1])*Rho_Bar/SS_Bar;
+*/
+/*            // TSRS
+            double Rho_Bar = 0.5 * (WL[0]+WR[0]), \
+                   SS_Bar = 0.5 * (SS_L+SS_R);
+            double P0 = fmax(0.0, \
+                   0.5*(WL[2]+WR[2]) + 0.5*(WL[1]-WR[1])*Rho_Bar*SS_Bar \
+                   );
+            double A_L = 2.0 / ( (Gamma+1.0)*WL[0] ), \
+                   A_R = 2.0 / ( (Gamma+1.0)*WR[0] );
+            double B_L = Gamma_Ext1 * WL[2], \
+                   B_R = Gamma_Ext1 * WR[2];
+            double G_L = sqrt(A_L / (P0+B_L)), \
+                   G_R = sqrt(A_R / (P0+B_R));
+            double P_Star = ( G_L*WL[2] + G_R*WR[2] - (WR[1]-WL[1]) ) \
+                   / ( G_L + G_R );
+            double U_Star = 0.5*(WL[1]+WR[1]) + 0.5*( \
+                   (P_Star-WR[2])*G_R - (P_Star-WL[2])*G_L );
+            double Rho_StarL = WL[0] \
+                   * (P_Star/WL[2]+Gamma_Ext1) \
+                   / (Gamma_Ext1*P_Star/WL[2]+1.0), \
+                   Rho_StarR = WR[0] \
+                   * (P_Star/WR[2]+Gamma_Ext1) \
+                   / (Gamma_Ext1*P_Star/WR[2]+1.0);
+*/
+            //
+            double SS_StarL = sqrt(Gamma*P_Star/Rho_StarL), \
+                   SS_StarR = sqrt(Gamma*P_Star/Rho_StarR);
+            double Lambda1_L = WL[1] - SS_L, \
+                   Lambda1_R = U_Star - SS_StarL;
+            if(Lambda1_L < 0.0 && Lambda1_R > 0.0){
+                EigVal[0] = Lambda1_L * (Lambda1_R-EigVal[0]) / (Lambda1_R-Lambda1_L);
+            }
+            double Lambda5_L = U_Star + SS_StarR, \
+                   Lambda5_R = WR[1] + SS_R;
+            if(Lambda5_L < 0.0 && Lambda5_R > 0.0){
+                EigVal[2] = Lambda5_R * (EigVal[2]-Lambda5_L) / (Lambda5_R-Lambda5_L);
+            }
             //
             calcFlux(WL, UL, FluxL);
             calcFlux(WR, UR, FluxR);
@@ -124,7 +186,7 @@ class Solution {
             for(int i = 0; i < 3; i++){
                 *(RoeFlux+i) = 0.5*(FluxL[i] + FluxR[i]);
                 for(int j = 0; j < 3; j++){
-                    *(RoeFlux+i) = *(RoeFlux+i) - 0.5*WaveA[j]*EigVal[j]*EigVec[i*3+j];
+                    *(RoeFlux+i) = *(RoeFlux+i) - 0.5*WaveA[j]*abs(EigVal[j])*EigVec[i*3+j];
                 }
             } 
         }
